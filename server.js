@@ -5,84 +5,61 @@ const cors = require('cors');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Explicit CORS for WordPress
 app.use(cors());
 app.use(express.json());
 
-const CLIENT_IDS = [
-  "WU4bVxk5Df0g5JC8ULzW77Ry7OM10Lyj",
-  "iZIs4mchueS9S0qSH97Yp7YyvO46pZ2i",
-  "2t9qZos706ST5v35u8A3pU9V9JS887S8"
-];
-
+// 1. Root Route (Test this in your browser)
 app.get("/", (req, res) => {
-  res.send("Server running ✅");
+    res.send("<h1>SoundCloud Backend is Live! ✅</h1><p>API is ready at /api/resolve</p>");
 });
 
+// 2. Health Check
+app.get("/api/health", (req, res) => {
+    res.json({ status: "ok", message: "API is working" });
+});
+
+// 3. Resolve SoundCloud URL
 app.get("/api/resolve", async (req, res) => {
-  const { url } = req.query;
-  if (!url) return res.status(400).json({ error: "URL is required" });
+    const { url } = req.query;
+    if (!url) return res.status(400).json({ error: "URL is required" });
 
-  try {
-    let trackData = null;
-    let workingId = "";
+    const CLIENT_ID = "WU4bVxk5Df0g5JC8ULzW77Ry7OM10Lyj"; // Standard public ID
 
-    for (const id of CLIENT_IDS) {
-      try {
-        const r = await axios.get(`https://api-v2.soundcloud.com/resolve`, {
-          params: { url, client_id: id }
+    try {
+        const r = await axios.get(`https://api-v2.soundcloud.com/resolve`, { 
+            params: { url, client_id: CLIENT_ID } 
         });
-        trackData = r.data;
-        workingId = id;
-        break;
-      } catch (e) {}
+        const trackData = r.data;
+        const transcodings = trackData.media.transcodings;
+        const best = transcodings.find(t => t.format.protocol === 'progressive') || transcodings[0];
+        const streamRes = await axios.get(best.url, { params: { client_id: CLIENT_ID } });
+
+        res.json({
+            title: trackData.title,
+            artist: trackData.user.username,
+            thumbnail: trackData.artwork_url || trackData.user.avatar_url,
+            download_url: streamRes.data.url
+        });
+    } catch (error) {
+        console.error(error);
+        res.status(500).json({ error: "SoundCloud refused the connection. Try again in a minute." });
     }
-
-    if (!trackData) throw new Error("Could not resolve track.");
-
-    const transcodings = trackData.media.transcodings;
-    const best =
-      transcodings.find(t => t.format.protocol === 'progressive') ||
-      transcodings[0];
-
-    const streamRes = await axios.get(best.url, {
-      params: { client_id: workingId }
-    });
-
-    res.json({
-      title: trackData.title,
-      artist: trackData.user.username,
-      thumbnail: trackData.artwork_url || trackData.user.avatar_url,
-      download_url: streamRes.data.url
-    });
-
-  } catch (error) {
-    res.status(500).json({ error: "Failed to resolve track." });
-  }
 });
 
-app.get("/api/download", async (req, res) => {
-  const { url, title } = req.query;
-
-  try {
-    const response = await axios({
-      method: 'get',
-      url: url,
-      responseType: 'stream'
-    });
-
-    res.setHeader(
-      "Content-Disposition",
-      `attachment; filename="${(title || "track").replace(/[^\w\s]/gi, "")}.mp3"`
-    );
-    res.setHeader("Content-Type", "audio/mpeg");
-
-    response.data.pipe(res);
-
-  } catch (e) {
-    res.status(500).send("Download failed.");
-  }
+// 4. Download Proxy
+app.get("/api/download-proxy", async (req, res) => {
+    const { url, title } = req.query;
+    try {
+        const response = await axios({ method: 'get', url: url, responseType: 'stream' });
+        res.setHeader("Content-Disposition", `attachment; filename="${title || 'track'}.mp3"`);
+        res.setHeader("Content-Type", "audio/mpeg");
+        response.data.pipe(res);
+    } catch (e) {
+        res.status(500).send("Download failed.");
+    }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server running on port ${PORT}`);
 });
